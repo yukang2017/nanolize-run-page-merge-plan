@@ -192,6 +192,10 @@ pre, code { font-variant-ligatures: none; }
 
 <section>
   <div class="panel">
+    <h3>这份方案已经执行</h3>
+    <p>分支 <code>claude/run-page-on-main</code> 和 PR #60 已经做好，执行的经过、审查、端到端验证和最终状态见<a href="../nanolize-run-page-merge-record/">合并记录</a>。下面是执行之前的方案原文。</p>
+  </div>
+  <div class="panel">
     <h3>这一版改了什么</h3>
     <ul class="plain">
       <li><b>新分支从 main 开，不从分支开。</b>这是你定的：main 是花了很大力气修理和验证过的，要尽量不影响它本身的内容。所以做法改成从 main 的最新提交开新分支，把 <code>claude/run-page-improvements</code> 相对分叉点的改进合进来。上一版建议的方向相反。<a href="#steps">合并步骤</a>、图和命令都已按新方向改写。</li>
