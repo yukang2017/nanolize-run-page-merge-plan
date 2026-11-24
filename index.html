@@ -1,0 +1,730 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>运行页分支合并方案</title>
+<meta name="description" content="把 nanolize 的运行页改进和轨迹可视化分支合进最新的 main：两条线各改了什么，文本冲突怎么解，Git 报不出来的问题有哪些，合并步骤和验证结果。">
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600&family=Space+Grotesk:wght@500;600&family=JetBrains+Mono:wght@400;500&family=Noto+Sans+SC:wght@400;500;600&display=swap">
+<style>
+/* Layout: one reading column. Verdict and four figures first, then the table of all items, then the fix plan in five packages (one block per defect: seen, checked, change, test), then what is no bug, the order of work, limits and the probe log. */
+:root {
+  --bg: #f4f6f9; --card: #fcfcfb; --ink: #14171c; --ink-2: #474e5c; --ink-3: #6b7281;
+  --line: #dde1e8; --accent: #2a78d6; --accent-soft: #dfeafa;
+  --good-ink: #0b6b0b; --warn-ink: #7a5200; --crit-ink: #a52727;
+  --good-bg: #e4f5e4; --warn-bg: #fdf1d3; --crit-bg: #fbe3e3;
+  --font-body: Inter, "PingFang SC", "Hiragino Sans GB", "Microsoft YaHei", "Noto Sans SC", system-ui, sans-serif;
+  --font-head: "Space Grotesk", Inter, "PingFang SC", "Hiragino Sans GB", "Microsoft YaHei", "Noto Sans SC", system-ui, sans-serif;
+  --font-mono: "JetBrains Mono", ui-monospace, SFMono-Regular, Menlo, Consolas, "PingFang SC", "Microsoft YaHei", "Noto Sans SC", monospace;
+}
+@media (prefers-color-scheme: dark) {
+  :root:not([data-theme="light"]) {
+    --bg: #111315; --card: #1a1a19; --ink: #eceef1; --ink-2: #c0c5ce; --ink-3: #959cab;
+    --line: #2f333a; --accent: #5a9cec; --accent-soft: #162c47;
+    --good-ink: #7fd67f; --warn-ink: #f3c458; --crit-ink: #f08d8d;
+    --good-bg: #12301a; --warn-bg: #3a2d0c; --crit-bg: #3b1a1a;
+    color-scheme: dark;
+  }
+}
+:root[data-theme="dark"] {
+  --bg: #111315; --card: #1a1a19; --ink: #eceef1; --ink-2: #c0c5ce; --ink-3: #959cab;
+  --line: #2f333a; --accent: #5a9cec; --accent-soft: #162c47;
+  --good-ink: #7fd67f; --warn-ink: #f3c458; --crit-ink: #f08d8d;
+  --good-bg: #12301a; --warn-bg: #3a2d0c; --crit-bg: #3b1a1a;
+  color-scheme: dark;
+}
+* { box-sizing: border-box; }
+html { -webkit-text-size-adjust: 100%; scroll-behavior: smooth; }
+body { margin: 0; background: var(--bg); color: var(--ink); font-family: var(--font-body); font-size: 15px; line-height: 1.7; }
+.page { max-width: 1000px; margin: 0 auto; padding-block: 36px 72px;
+  padding-left: max(16px, env(safe-area-inset-left, 0px)); padding-right: max(16px, env(safe-area-inset-right, 0px));
+  display: flex; flex-direction: column; gap: 44px; }
+header { display: flex; flex-direction: column; gap: 12px; }
+.eyebrow { font-family: var(--font-mono); font-size: 12px; letter-spacing: .04em; color: var(--ink-3); }
+h1 { font-family: var(--font-head); font-weight: 600; font-size: clamp(25px, 4.2vw, 36px); line-height: 1.28; margin: 0; text-wrap: balance; }
+h2 { font-family: var(--font-head); font-weight: 600; font-size: 22px; line-height: 1.3; margin: 0; text-wrap: balance; }
+h3 { font-size: 16px; font-weight: 600; margin: 0; line-height: 1.45; }
+p { margin: 0; max-width: 72ch; }
+a { color: var(--accent); }
+.lede { font-size: 16.5px; color: var(--ink-2); max-width: 72ch; }
+code, .mono { font-family: var(--font-mono); font-size: .86em; }
+code { background: var(--accent-soft); padding: 1px 5px; border-radius: 4px; overflow-wrap: anywhere; }
+section { display: flex; flex-direction: column; gap: 16px; min-width: 0; scroll-margin-top: 16px; }
+.meta { display: flex; flex-wrap: wrap; gap: 6px 22px; font-size: 13px; color: var(--ink-2); }
+.meta b { font-weight: 500; color: var(--ink-3); }
+
+.kpis { display: grid; grid-template-columns: repeat(auto-fit, minmax(215px, 1fr)); gap: 12px; }
+.kpi { background: var(--card); border: 1px solid var(--line); border-radius: 10px; padding: 14px 16px; display: flex; flex-direction: column; gap: 4px; min-width: 0; }
+.kpi .label { font-size: 12.5px; color: var(--ink-3); }
+.kpi .value { font-family: var(--font-head); font-weight: 600; font-size: 30px; line-height: 1.15; font-variant-numeric: tabular-nums; }
+.kpi .value small { font-size: 15px; font-weight: 500; color: var(--ink-2); }
+.kpi .note { font-size: 12.5px; color: var(--ink-2); line-height: 1.5; }
+
+.pill { display: inline-flex; align-items: center; gap: 5px; font-size: 12.5px; font-weight: 500; padding: 2px 9px; border-radius: 999px; white-space: nowrap; }
+.pill.good { background: var(--good-bg); color: var(--good-ink); }
+.pill.warn { background: var(--warn-bg); color: var(--warn-ink); }
+.pill.crit { background: var(--crit-bg); color: var(--crit-ink); }
+.pill i { font-style: normal; font-weight: 700; }
+.tag { display: inline-block; font-size: 12px; color: var(--ink-2); border: 1px solid var(--line); border-radius: 4px; padding: 0 6px; white-space: nowrap; line-height: 1.6; }
+
+.panel { background: var(--card); border: 1px solid var(--line); border-radius: 10px; padding: 18px; display: flex; flex-direction: column; gap: 14px; min-width: 0; }
+.scroll { overflow-x: auto; }
+table { border-collapse: collapse; width: 100%; font-size: 13.5px; }
+th, td { text-align: left; padding: 9px 14px 9px 0; border-bottom: 1px solid var(--line); vertical-align: top; }
+th { font-weight: 500; color: var(--ink-3); font-size: 12.5px; white-space: nowrap; vertical-align: bottom; }
+tr:last-child td { border-bottom: 0; }
+td.id { font-family: var(--font-head); font-weight: 600; color: var(--ink-2); white-space: nowrap; }
+td.id a { color: inherit; text-decoration: none; border-bottom: 1px dotted var(--ink-3); }
+td small { color: var(--ink-3); font-size: 12px; display: block; margin-top: 3px; line-height: 1.5; }
+td.nowrap { white-space: nowrap; }
+table.all td:nth-child(2) { min-width: 130px; }
+table.all td:nth-child(3) { min-width: 300px; }
+table.all td:nth-child(4) { min-width: 150px; }
+table.probes td:nth-child(3) { min-width: 260px; }
+table.probes td:nth-child(4) { min-width: 300px; }
+table.order td:nth-child(2) { min-width: 300px; }
+
+ul.plain { margin: 0; padding-left: 1.15em; display: flex; flex-direction: column; gap: 8px; max-width: 76ch; }
+ol.plain { margin: 0; padding-left: 1.4em; display: flex; flex-direction: column; gap: 8px; max-width: 76ch; }
+
+.pkg { display: flex; flex-direction: column; gap: 12px; scroll-margin-top: 16px; }
+.pkg > p { color: var(--ink-2); }
+.item { display: grid; grid-template-columns: 3.2em 1fr; gap: 4px 14px; padding: 22px 0; border-bottom: 1px solid var(--line); scroll-margin-top: 16px; }
+.item:first-child { padding-top: 2px; } .item:last-child { border-bottom: 0; padding-bottom: 2px; }
+.item .n { font-family: var(--font-head); font-weight: 600; font-size: 22px; line-height: 1.25; color: var(--ink-3); font-variant-numeric: tabular-nums; }
+.item .body { display: flex; flex-direction: column; gap: 10px; min-width: 0; }
+.item .head { display: flex; flex-wrap: wrap; gap: 8px 10px; align-items: center; }
+.item .src { font-size: 12.5px; color: var(--ink-3); }
+.item dl { margin: 0; display: grid; grid-template-columns: 7.2em 1fr; gap: 10px 12px; font-size: 14px; }
+.item dt { color: var(--ink-3); font-size: 13px; padding-top: 1px; }
+.item dd { margin: 0; max-width: 74ch; min-width: 0; }
+.item dd > ul, .item dd > ol, .item dd > pre { margin-top: 8px; }
+.item dd > ul:first-child, .item dd > ol:first-child { margin-top: 0; }
+.item dd > pre + * { margin-top: 8px; }
+.item dd p { margin-top: 8px; }
+@media (max-width: 560px) { .item { grid-template-columns: 1fr; } .item dl { grid-template-columns: 1fr; gap: 2px 0; } .item dt { margin-top: 8px; } }
+
+pre { margin: 0; font-family: var(--font-mono); font-size: 12.5px; line-height: 1.6; background: var(--accent-soft); padding: 10px 12px; border-radius: 6px; white-space: pre-wrap; overflow-wrap: anywhere; }
+footer { font-size: 12.5px; color: var(--ink-3); border-top: 1px solid var(--line); padding-top: 16px; display: flex; flex-direction: column; gap: 6px; }
+footer p { max-width: 86ch; }
+/* additions for this page */
+.item .body h4 { margin: 14px 0 4px; font-size: 13px; letter-spacing: .02em; }
+table td.nowrap, table th.nowrap { white-space: nowrap; }
+
+/* On a narrow screen a table of three or more columns keeps readable columns and scrolls sideways in its panel. */
+@media (max-width: 720px) {
+  .scroll table:has(th:nth-child(3)) { min-width: 640px; }
+  .scroll table:has(th:nth-child(5)) { min-width: 900px; }
+}
+.panel > h3 { font-size: 17px; }
+.note { font-size: 13px; color: var(--ink-3); max-width: 80ch; }
+td.num, th.num { text-align: right; font-variant-numeric: tabular-nums; white-space: nowrap; padding-right: 18px; }
+.item .head h3 { font-size: 16.5px; }
+.pkg > h3 { font-size: 18px; font-family: var(--font-head); margin-top: 6px; }
+.item dd .scroll { margin-top: 8px; }
+.item dd table td:first-child { min-width: 7em; }
+@media (max-width: 720px) { .item dd .scroll table { min-width: 560px; } }
+
+/* this page */
+#overlap td:first-child { min-width: 15em; }
+#overlap td:nth-child(5) { min-width: 18em; }
+#lines td:first-child { min-width: 6.5em; }
+#lines td:nth-child(2), #lines td:nth-child(3) { min-width: 17em; }
+#verify td:first-child { min-width: 13em; }
+#verify td:nth-child(3) { min-width: 16em; }
+#later td:first-child { min-width: 2.5em; }
+#later td:nth-child(2) { min-width: 16em; }
+#later td:nth-child(3) { min-width: 15em; }
+#decide td:first-child { min-width: 2em; }
+#decide td:nth-child(2) { min-width: 13em; }
+#decide td:nth-child(3), #decide td:nth-child(4) { min-width: 17em; }
+#fine td:first-child { min-width: 9em; }
+@media (max-width: 720px) {
+  #overlap .scroll table { min-width: 980px; }
+  #lines .scroll table, #verify .scroll table, #later .scroll table { min-width: 860px; }
+  #decide .scroll table { min-width: 980px; }
+}
+
+/* the two lines of work, drawn */
+.fork { width: 100%; height: auto; display: block; }
+.fork text { font-family: var(--font-body, inherit); }
+.fork .t { font-size: 13px; fill: var(--ink); }
+.fork .s { font-size: 11.5px; fill: var(--ink-3); }
+.fork .m { font-family: var(--font-mono); font-size: 11.5px; fill: var(--ink-2); }
+.fork .line-main { stroke: #2a78d6; } .fork .dot-main { fill: #2a78d6; }
+.fork .line-branch { stroke: #c8640a; } .fork .dot-branch { fill: #c8640a; }
+.fork .line-plan { stroke: #6b7385; stroke-dasharray: 5 5; } .fork .dot-plan { fill: var(--bg, #fff); stroke: #6b7385; }
+.fork-scroll { overflow-x: auto; }
+.fork-scroll svg { min-width: 680px; }
+
+/* steps of the merge, numbered */
+ol.steps { list-style: none; counter-reset: step; margin: 0; padding: 0; display: flex; flex-direction: column; gap: 14px; }
+ol.steps > li { counter-increment: step; display: grid; grid-template-columns: 34px minmax(0, 1fr); gap: 0 12px; }
+ol.steps > li::before { content: counter(step); font-family: var(--font-head); font-weight: 600; font-size: 15px; width: 30px; height: 30px;
+  border-radius: 50%; background: var(--accent-soft); color: var(--accent, #2a78d6); display: flex; align-items: center; justify-content: center; }
+ol.steps > li > div > b { display: block; margin-bottom: 4px; }
+ol.steps > li > div > p { margin: 0 0 6px; }
+ol.steps pre { margin-top: 6px; }
+.sev { white-space: nowrap; }
+pre, code { font-variant-ligatures: none; }
+#steps td:first-child { min-width: 5.5em; white-space: nowrap; }
+
+</style>
+</head>
+<body>
+<div class="page">
+
+<header>
+  <div class="eyebrow">nanolize · 分支合并方案 · claude/run-page-improvements → main · 依据：main @ 25634d02（PR #59 合入后）和分支 @ 31a76ac4 · 2026-11-24</div>
+  <h1>把运行页和轨迹工具的分支合进 main：冲突在哪，怎么合</h1>
+  <p class="lede">运行页改进和轨迹可视化工具做在 <code>claude/run-page-improvements</code> 上，起点是 PR #59 合并之前的 main。现在 PR #59 已经进了 main，两条线要合到一起。这一页回答三件事：两边各改了什么、在哪里碰上；Git 报出来的冲突怎么解；Git 报不出来、但合并后会说错话的地方有哪些。结论是可以合，一次合并提交加几个小的修复提交就够，下面是具体做法。</p>
+  <div class="meta">
+    <span><b>两条线</b> 都从 <code>cd7fd735</code>（PR #57 合入后）分出。main 多了 PR #59 的 198 个提交；分支多了 6 个提交</span>
+    <span><b>做了什么</b> 在本地做了一次完整的试合并，解完全部冲突，跑了 CI 的每一步和整套测试；另有两份独立的代码调查，专查 Git 报不出来的问题</span>
+    <span><b>没做什么</b> 没有推送，没有开 PR，远端的两条分支都没有动</span>
+    <span><b>状态</b> 方案。<a href="#decide">五件事</a>需要你定，定了就可以执行</span>
+  </div>
+</header>
+
+<section>
+  <div class="kpis">
+    <div class="kpi"><div class="label">两边都改过的文件</div><div class="value">23 <small>个</small></div>
+      <div class="note">18 个 Git 自动合并，5 个冲突。分支另有 44 个文件只有它改过，main 另有 88 个</div></div>
+    <div class="kpi"><div class="label">文本冲突</div><div class="value">10 <small>处</small></div>
+      <div class="note">在 5 个文件里：2 个源码文件 6 处，2 份文档 2 处，1 个生成的演示页 2 处。见<a href="#conflicts">冲突怎么解</a></div></div>
+    <div class="kpi"><div class="label">Git 报不出来、合并里要处理的</div><div class="value">3 <small>件</small></div>
+      <div class="note">公开轨迹会带出性能声明的原文；三个演示页要重新生成；一份基准记录要重录。见<a href="#must">必须处理的</a></div></div>
+    <div class="kpi"><div class="label">建议一起修的</div><div class="value">4 <small>处</small></div>
+      <div class="note">分支的新显示方式遮住或误判了 PR #59 新加的信息。都是几行的改动。见<a href="#should">建议一起修的</a></div></div>
+    <div class="kpi"><div class="label">试合并上的 JS 测试</div><div class="value">395 <small>/ 395</small></div>
+      <div class="note">两边的测试合在一起全部通过。Python 整套 5,878 项里，除了要重录的基准记录，没有合并引起的失败。见<a href="#verify">验证</a></div></div>
+    <div class="kpi"><div class="label">分支的体量</div><div class="value">67 <small>个文件</small></div>
+      <div class="note">新增 22,122 行，其中一半（11,440 行）是三个生成的演示页，6,563 行是轨迹工具</div></div>
+  </div>
+</section>
+
+<section id="summary">
+  <h2>要点</h2>
+  <ul class="plain">
+    <li><b>两条线改的东西大体不重叠，所以冲突少。</b>PR #59 主要改后端（性能验收的范围、冻结阶段、检查的执行），分支主要改前端和新加轨迹工具。真正碰上的只有 23 个文件，其中 18 个 Git 能自己合；自动合并的结果由两份调查逐个核对过，整套测试也跑在合并后的代码上。见<a href="#lines">两条线</a>。</li>
+    <li><b>10 处文本冲突里只有 1 处需要动脑子。</b>分支把“交付是否成功”的判断条件从一段内联代码搬进了新函数 <code>outcomeCriteria</code>，而 PR #59 恰好在那段内联代码里加了一条规则（项目没有声明性能时，不把“性能保持”算作条件）。Git 在旧位置报冲突，如果直接取分支那一边，main 的规则就悄悄丢了。正确的解法是取分支的结构，再把这条规则写进新函数。好在 main 自带的一条测试能拦住错误的解法。其余 9 处都是两边各加各的，两边都留。见<a href="#conflicts">冲突怎么解</a>。</li>
+    <li><b>更值得注意的是 Git 报不出来的问题。</b>分支的代码是照着 PR #59 之前的记录格式写的。合并后有一处会破坏它自己的承诺：公开级别的轨迹文件说好只留编号、枚举、计数和时间，但 PR #59 把性能声明的出处、原句和运行命令放进了作业的结果里，记录器整份照抄，于是这些文字进了公开轨迹。见 <a href="#m1">M1</a>。</li>
+    <li><b>另有 4 处是“分支的新显示方式遮住了 PR #59 新加的东西”。</b>最要紧的一处：嵌在第 02 阶段里的选择页现在默认只显示能力图，PR #59 放在“规划说明”里的性能声明列表被折叠起来，按钮上也不提示，所有者提交前看不到这次要测哪几条。见 <a href="#s1">S1</a>。</li>
+    <li><b>三个生成的演示页和一份基准记录要重做，都是跑一条命令的事。</b>演示页内嵌了运行页的脚本，脚本一合并它们就过期，有测试会报。固定流程的基准记录（<code>fixed_parity_golden.json</code>）只多出一个字段，重录之后的差异我核对过。见 <a href="#m2">M2</a>、<a href="#m3">M3</a>。</li>
+    <li><b>建议的做法：从分支的末端开一条新分支，把 main 合进来，一个合并提交解决冲突，之后每个修复一个提交、各带一条测试，开 PR 进 main。</b>不建议变基（6 个提交每个都改了生成的演示页，同样的冲突要反复解）也不建议压成一个提交（会丢掉 6 段写得很细的提交说明）。见<a href="#steps">合并步骤</a>。</li>
+    <li><b>没有发现会让合并后的代码出错或崩溃的地方。</b>两份调查把合并后的页面脚本在 591 帧真实运行记录上画了一遍，把记录器在 PR #59 自己的三次端到端运行的记录上跑了一遍，都没有异常。见<a href="#fine">查过没问题的</a>。</li>
+  </ul>
+</section>
+
+
+<section id="lines">
+  <h2>两条线各改了什么</h2>
+  <p>两条线都从同一个提交分出，之后互不知道对方。蓝色是 main，橙色是分支，虚线是这份方案要做的事。</p>
+  <div class="panel scroll fork-scroll">
+    <svg class="fork" viewBox="0 0 900 250" role="img" aria-label="两条线从同一个提交分出：main 多了 PR #59，分支多了 6 个提交；方案是从分支末端开新分支，把 main 合进来，再加修复提交，最后开 PR 合回 main">
+      <!-- main -->
+      <line class="line-main" x1="60" y1="60" x2="330" y2="60" stroke-width="3"/>
+      <line class="line-plan" x1="330" y1="60" x2="830" y2="60" stroke-width="2"/>
+      <circle class="dot-main" cx="60" cy="60" r="7"/>
+      <circle class="dot-main" cx="330" cy="60" r="7"/>
+      <circle class="dot-plan" cx="830" cy="60" r="7" stroke-width="2"/>
+      <text class="t" x="60" y="34" text-anchor="middle">分叉点</text>
+      <text class="m" x="60" y="18" text-anchor="middle">cd7fd735</text>
+      <text class="t" x="330" y="34" text-anchor="middle">main 现在</text>
+      <text class="m" x="330" y="18" text-anchor="middle">25634d02 · PR #59 · 198 个提交</text>
+      <text class="t" x="830" y="34" text-anchor="middle">PR 合入</text>
+      <!-- branch -->
+      <path class="line-branch" d="M60 60 C 90 60, 100 170, 140 170 L 350 170" fill="none" stroke-width="3"/>
+      <circle class="dot-branch" cx="150" cy="170" r="5"/><circle class="dot-branch" cx="190" cy="170" r="5"/>
+      <circle class="dot-branch" cx="230" cy="170" r="5"/><circle class="dot-branch" cx="270" cy="170" r="5"/>
+      <circle class="dot-branch" cx="310" cy="170" r="5"/><circle class="dot-branch" cx="350" cy="170" r="7"/>
+      <text class="t" x="225" y="198" text-anchor="middle">分支：6 个提交</text>
+      <text class="m" x="225" y="216" text-anchor="middle">claude/run-page-improvements @ 31a76ac4</text>
+      <!-- plan -->
+      <line class="line-plan" x1="350" y1="170" x2="760" y2="170" stroke-width="2"/>
+      <line class="line-plan" x1="330" y1="60" x2="470" y2="170" stroke-width="2"/>
+      <path class="line-plan" d="M760 170 C 800 170, 800 60, 830 60" fill="none" stroke-width="2"/>
+      <circle class="dot-plan" cx="470" cy="170" r="7" stroke-width="2"/>
+      <circle class="dot-plan" cx="560" cy="170" r="5" stroke-width="2"/><circle class="dot-plan" cx="600" cy="170" r="5" stroke-width="2"/>
+      <circle class="dot-plan" cx="640" cy="170" r="5" stroke-width="2"/><circle class="dot-plan" cx="680" cy="170" r="5" stroke-width="2"/>
+      <circle class="dot-plan" cx="760" cy="170" r="5" stroke-width="2"/>
+      <text class="t" x="470" y="198" text-anchor="middle">合并提交</text>
+      <text class="s" x="470" y="216" text-anchor="middle">把 main 合进来，解 10 处冲突</text>
+      <text class="t" x="620" y="198" text-anchor="middle">修复提交</text>
+      <text class="s" x="620" y="216" text-anchor="middle">每个带一条测试</text>
+      <text class="t" x="760" y="198" text-anchor="middle">重新生成</text>
+      <text class="s" x="760" y="216" text-anchor="middle">演示页、基准记录</text>
+    </svg>
+  </div>
+
+  <div class="panel scroll"><table>
+    <thead><tr><th></th><th>main 这一边：PR #59</th><th>分支这一边：6 个提交</th></tr></thead>
+    <tbody>
+      <tr><td><b>主题</b></td>
+        <td>性能验收只测项目自己声明的性能；冻结阶段不再整步重来；设计出的测试文件并行试跑</td>
+        <td>运行页说得更少、更准，能在页面上回答作业的问题；演示页换成真实运行；新增轨迹记录和回放工具</td></tr>
+      <tr><td><b>体量</b></td>
+        <td>111 个文件，+24,186 −1,072。后端 45 个文件 +7,541，测试 49 个文件 +14,584，文档和 skill 10 个文件 +1,474</td>
+        <td>67 个文件，+22,122 −1,060。生成的演示页 3 个 +11,440，轨迹工具 14 个文件 +6,563，其余测试 22 个文件 +1,822，运行页的脚本和样式 8 个文件 +754，页面生成脚本 4 个 +866，后端 8 个文件 +381</td></tr>
+      <tr><td><b>后端</b></td>
+        <td>性能声明的列表、查找工具和核对；没有声明就不测（<code>not_declared</code>）；GPU 上的测量；测试设计被打断后复用做完的会话；调度器提交失败后对账重试；保存候选后重新准备环境；输出带路径的检查判为未验证</td>
+        <td>很少：比较步骤报告检查做到第几个（<code>step_progress.checks</code>）；评审服务多一条回答问题的路由；列出测试设计会话的目录；命令行多一个 <code>trajectory</code> 子命令</td></tr>
+      <tr><td><b>运行页</b></td>
+        <td>少量：第 05、06 阶段逐条列出性能声明和测量结果；项目没有声明性能时用一句话说明，不算通过也不算缺口（<code>run-dashboard.js</code> +199）</td>
+        <td>大量：步骤下面列出同时在工作的会话；比较步骤的进度条；已完成的条目折叠成一行；页面上的回答框和继续按钮；标签页标题提示是否在等人；交付报告的链接；“是否成功”的判断改成一个函数；选择页在第 02 阶段里默认只显示能力图</td></tr>
+      <tr><td><b>新东西</b></td>
+        <td><code>performance_claims.py</code>、<code>performance_discovery.py</code>、<code>design_sessions.py</code> 等模块；MCP 工具 <code>discover_performance_claims</code></td>
+        <td><code>nanolize trajectory record | site | show</code>；轨迹回放页；<code>docs/run-page-cases.html</code>（四种开关组合对照）和 <code>docs/trajectory-demo.html</code></td></tr>
+      <tr><td><b>skill 和文档</b></td>
+        <td>第 9、10 步：GPU 分区的设置，怎么整理性能声明列表（+368 行）</td>
+        <td>恢复出来的测试文件由主持会话直接提交，不再停下来问；选择页默认只显示能力图</td></tr>
+    </tbody>
+  </table></div>
+</section>
+
+<section id="overlap">
+  <h2>在哪里碰上：两边都改过的 23 个文件</h2>
+  <p>数字是相对分叉点的增删行数。“自动”表示 Git 自己合出了结果，这些结果都核对过：两份调查逐个读了两边的改动和合并后的文件，整套测试也跑在合并后的代码上。</p>
+  <div class="panel scroll"><table>
+    <thead><tr><th>文件</th><th class="num">main</th><th class="num">分支</th><th>Git</th><th>判断</th></tr></thead>
+    <tbody>
+      <tr><td><code>src/nanolize/assets/run-dashboard.js</code></td><td class="num">+199 −18</td><td class="num">+259 −54</td><td><span class="pill crit">冲突 2 处</span></td><td>唯一需要小心的一处，见 <a href="#c1">C1</a>。另有 2 处显示上的问题 Git 报不出来，见 <a href="#s2">S2</a>、<a href="#s3">S3</a></td></tr>
+      <tr><td><code>src/nanolize/verification.py</code></td><td class="num">+530 −28</td><td class="num">+49 −6</td><td><span class="pill crit">冲突 4 处</span></td><td>两边各加各的，都留。见 <a href="#c2">C2</a></td></tr>
+      <tr><td><code>docs/run-page-demo.html</code></td><td class="num">+199 −18</td><td class="num">+720 −159</td><td><span class="pill crit">冲突 2 处</span></td><td>生成的文件，不手工解：取分支的版本，重新生成。见 <a href="#c3">C3</a></td></tr>
+      <tr><td><code>docs/job-tools.md</code></td><td class="num">+216 −22</td><td class="num">+17 −2</td><td><span class="pill crit">冲突 1 处</span></td><td>相邻的两段，都留。见 <a href="#c4">C4</a></td></tr>
+      <tr><td><code>docs/run-page.md</code></td><td class="num">+2 −2</td><td class="num">+158 −43</td><td><span class="pill crit">冲突 1 处</span></td><td>同一张表的同两行：取分支的表，把 main 的两处补进去。见 <a href="#c4">C4</a></td></tr>
+      <tr><td><code>src/nanolize/run_dashboard.py</code></td><td class="num">+8 −3</td><td class="num">+175 −13</td><td><span class="pill good">自动</span></td><td>没有问题。合并后多出一个字段，基准记录要重录，见 <a href="#m3">M3</a></td></tr>
+      <tr><td><code>src/nanolize/run_flow.py</code></td><td class="num">+4 −1</td><td class="num">+62 −12</td><td><span class="pill good">自动</span></td><td>没有问题。少一个词的中文译法，见<a href="#later">之后再做的</a></td></tr>
+      <tr><td><code>src/nanolize/execution_server.py</code></td><td class="num">+18 −3</td><td class="num">+14 −1</td><td><span class="pill good">自动</span></td><td>代码没有问题。main 在这里把性能声明放进“规划说明”，分支的选择页默认把它折叠了，见 <a href="#s1">S1</a></td></tr>
+      <tr><td><code>src/nanolize/leaf_test_design.py</code></td><td class="num">+931 −95</td><td class="num">+44 −0</td><td><span class="pill good">自动</span></td><td>分支只加了一个只读的函数，目录布局 main 没有改。被打断后重做的设计，会话列不出来，见<a href="#later">之后再做的</a></td></tr>
+      <tr><td><code>src/nanolize/execution.py</code></td><td class="num">+471 −62</td><td class="num">+12 −0</td><td><span class="pill good">自动</span></td><td>分支只加了一个方法（<code>answer</code>），它调用的函数 main 没有改</td></tr>
+      <tr><td><code>src/nanolize/job_tools/verify.py</code></td><td class="num">+52 −10</td><td class="num">+20 −1</td><td><span class="pill good">自动</span></td><td>分支包住比较的那一行，main 改的是别的函数</td></tr>
+      <tr><td><code>src/nanolize/cli.py</code></td><td class="num">+20 −3</td><td class="num">+5 −0</td><td><span class="pill good">自动</span></td><td>两个新子命令不重名：<code>trajectory</code> 和 <code>discover-performance-claims</code></td></tr>
+      <tr><td><code>skills/nanolize-run/SKILL.md</code></td><td class="num">+368 −17</td><td class="num">+26 −15</td><td><span class="pill good">自动</span></td><td>改的是不同的步骤。合并后有两句话要对一下，见 <a href="#s1">S1</a></td></tr>
+      <tr><td><code>skills/nanolize/SKILL.md</code>、<code>skills/simplify-code/SKILL.md</code></td><td class="num">+19 −14</td><td class="num">+21 −14</td><td><span class="pill good">自动</span></td><td>不同的段落。两个生成的提示词文档检查通过，不用重新生成</td></tr>
+      <tr><td><code>README.md</code>、<code>README.zh-CN.md</code></td><td class="num">+53 −22</td><td class="num">+64 −4</td><td><span class="pill good">自动</span></td><td>不同的章节</td></tr>
+      <tr><td><code>scripts/distribution_probe.py</code></td><td class="num">+1 −0</td><td class="num">+2 −1</td><td><span class="pill good">自动</span></td><td>各自往列表里加了名字。合并后的打包检查通过</td></tr>
+      <tr><td><code>tests/run-dashboard.test.cjs</code></td><td class="num">+232 −1</td><td class="num">+160 −6</td><td><span class="pill good">自动</span></td><td>合并后全部通过</td></tr>
+      <tr><td><code>tests/test_run_dashboard.py</code>、<code>test_run_flow.py</code>、<code>test_check_executor.py</code></td><td class="num">+134 −21</td><td class="num">+128 −2</td><td><span class="pill good">自动</span></td><td>各加各的测试，结果见<a href="#verify">验证</a></td></tr>
+      <tr><td><code>tests/durations.json</code></td><td class="num">+18 −0</td><td class="num">+1 −0</td><td><span class="pill good">自动</span></td><td>合出来是合法、有序的 JSON</td></tr>
+    </tbody>
+  </table></div>
+  <p class="note">只有一边改过的文件不会冲突，但不等于没有关系：分支新加的 44 个文件里，轨迹记录器读的正是 PR #59 改过格式的那些作业记录。这部分见<a href="#hidden">下一节之后的“Git 报不出来的问题”</a>。</p>
+</section>
+
+
+<section id="conflicts">
+  <h2>Git 报出来的冲突怎么解</h2>
+  <p>5 个文件，10 处。下面每一处都在本地的试合并里按这里写的办法解过，解法写成了一个脚本，重做一遍只要几秒。</p>
+
+  <div class="pkg">
+    <div class="panel">
+
+      <div class="item" id="c1">
+        <div class="n">C1</div>
+        <div class="body">
+          <div class="head"><h3><code>run-dashboard.js</code>：交付是否成功的判断条件</h3><span class="tag">2 处</span><span class="pill warn">要小心</span></div>
+          <dl>
+            <dt>两边做了什么</dt>
+            <dd>第 06 阶段里有一段代码，列出“交付成功”要满足的条件：行为检查通过、原版基线就绪、安装通过、性能保持等等。
+              <ul class="plain">
+                <li><b>分支</b>把这段代码搬进了一个新函数 <code>outcomeCriteria</code>，因为页头的状态标记和结束时的说明现在也要用同一份条件；原来的位置只剩三行。</li>
+                <li><b>main</b> 在原来的位置改了一行：项目没有声明任何性能时（<code>not_declared</code>），不把“性能保持”列为条件。没有要保持的东西，既不算通过也不算缺口。</li>
+              </ul></dd>
+            <dt>为什么要小心</dt>
+            <dd>Git 在原来的位置报冲突，两边看上去是“一大段旧代码”对“三行新代码”，很容易直接取分支那一边。那样合出来的文件没有任何冲突标记，却把 main 的规则丢了：分支的新函数里还是老写法 <code>if (speed) …</code>。后果是 <code>performance=on</code> 而项目没有声明性能的作业，页面会在交付结论下面列出一条不成立的“性能保持”，结束时的说明也把它算成没有守住的条件，而实际上什么都没有测、也没有什么要守。</dd>
+            <dt>解法</dt>
+            <dd>原位置取分支的三行；然后在 <code>outcomeCriteria</code> 里把 main 的规则写进去：
+<pre>// 分支的写法
+if (speed) criteria.push({label: T("Performance preserved"), ok: speed.status === "passed", why: ""});
+
+// 合并后
+if (speed &amp;&amp; speed.status !== "not_declared")
+  criteria.push({label: T("Performance preserved"), ok: speed.status === "passed", why: ""});</pre>
+              第二处冲突是文件末尾的导出列表，两边各加了名字，取并集（main 的 <code>CLAIM_REASONS</code>、<code>claimLines</code>，分支的 <code>outcomeCriteria</code>、<code>endNote</code>、<code>runSpan</code>、<code>stepLimit</code>、<code>span</code>）。</dd>
+            <dt>怎么知道解对了</dt>
+            <dd>我特意按错误的办法解了一遍（直接取分支那一边），main 自带的测试“a project that declares no performance is told so in every place, never as a gap and never as preserved”失败，395 项里错 1 项。按上面的办法解，395 项全过。调查还确认了这一处改动同时管住了页头的状态、结束说明和页面第一行下面的说明，因为它们都读这个函数。</dd>
+          </dl>
+        </div>
+      </div>
+
+      <div class="item" id="c2">
+        <div class="n">C2</div>
+        <div class="body">
+          <div class="head"><h3><code>verification.py</code>：在私有副本里并行跑检查</h3><span class="tag">4 处</span><span class="pill good">两边都留</span></div>
+          <dl>
+            <dt>两边做了什么</dt>
+            <dd><ul class="plain">
+              <li><b>main</b> 给 <code>_in_copies</code>（在树的私有副本里同时跑多条检查）加了三个参数：<code>retired</code>（被检查弄脏、不能再用的副本）、<code>places</code>（每条检查在哪个副本里跑的）、<code>length</code>（让副本的路径和候选树一样长）；还加了两个新函数 <code>_copy_place</code>、<code>path_length</code>，并让设计出的测试文件的试跑也走副本。</li>
+              <li><b>分支</b>加了一个上下文变量 <code>PROGRESS</code> 和一个参数 <code>ended</code>，让比较步骤能报告“多少条检查已经有结果、现在能同时跑几条”，运行页据此画进度条。</li>
+            </ul></dd>
+            <dt>解法</dt>
+            <dd>四处都是在同一个位置各加各的：
+              <ol class="plain">
+                <li>模块里的同一个空位：main 的两个函数在前，分支的 <code>PROGRESS</code> 在后。</li>
+                <li>函数签名：参数取并集，<code>…, retired=None, places=None, length=None, ended=None</code>。</li>
+                <li>文档字符串：两边各自的段落都留。</li>
+                <li><code>_run_checks_here</code> 开头：留分支的计数代码。它下面跟着的两行注释是分叉点的旧注释，main 已经把那一段改写成了新的分支，这两行不留。</li>
+              </ol></dd>
+            <dt>合起来对不对</dt>
+            <dd>对。进度只在比较步骤（<code>compare_behavior</code>）里才打开，而比较步骤那一批检查不走 main 新加的任何一条路径（不试副本、不换种子、不问另一个路径），所以 main 的新调用都不会经过分支的计数；计数用的是这一批检查名字的集合，不会超过总数，也不会重复算。分支在函数体里加的那几行（一条检查在副本里跑完后报一声）被 Git 自动合进了 main 改过的函数体，位置是对的，在“副本是否退役”的处理之前。查轨迹工具的那份调查自己独立解了一遍这个文件，结果和试合并里的逐字节相同。</dd>
+          </dl>
+        </div>
+      </div>
+
+      <div class="item" id="c3">
+        <div class="n">C3</div>
+        <div class="body">
+          <div class="head"><h3><code>docs/run-page-demo.html</code>：生成的演示页</h3><span class="tag">2 处</span><span class="pill good">重新生成</span></div>
+          <dl>
+            <dt>为什么会冲突</dt>
+            <dd>这个页面把运行页的脚本整份内嵌在自己里面。两边都改了 <code>run-dashboard.js</code>，各自刷新过这个页面，所以冲突的位置和内容就是 C1 的翻版。</dd>
+            <dt>解法</dt>
+            <dd>不手工解。取分支的版本（它带着两次真实的 detectron2 运行和一次录制的 tqdm 运行的画面），等 C1、C2 解完之后用仓库自己的脚本按合并后的资源重写一遍：
+<pre>git checkout --ours docs/run-page-demo.html    # 在分支上合入 main 时，分支是“我方”
+python scripts/run_page_demo.py refresh</pre>
+              画面数据不变，只换内嵌的脚本和样式。另外两个演示页没有冲突，但同样过期，要一起重新生成，见 <a href="#m2">M2</a>。</dd>
+          </dl>
+        </div>
+      </div>
+
+      <div class="item" id="c4">
+        <div class="n">C4</div>
+        <div class="body">
+          <div class="head"><h3><code>docs/job-tools.md</code> 和 <code>docs/run-page.md</code>：两份文档</h3><span class="tag">2 处</span><span class="pill good">两边都留</span></div>
+          <dl>
+            <dt><code>job-tools.md</code></dt>
+            <dd>main 在“长步骤做到哪了”这一条的前面加了一大段（测试设计被打断后怎么复用会话），分支改了这一条的第一句（加上了比较步骤）。两处紧挨着，所以冲突。解法：main 的那一段照留，后面接分支的句子。</dd>
+            <dt><code>run-page.md</code></dt>
+            <dd>页面各区域的那张表，分支几乎重写了每一行，main 在其中两行里各加了一处：“流程”一行加了半句（项目没有声明性能时的性能比较不算一步），“阶段详情”一行加了一段（逐条列出性能声明）。解法：取分支的表，把 main 的这两处插回它们原来所在的句子后面。合并后和分支相比，只多出 main 的这两处。</dd>
+          </dl>
+        </div>
+      </div>
+
+    </div>
+  </div>
+</section>
+
+
+<section id="hidden">
+  <h2>Git 报不出来的问题</h2>
+  <p>文本不冲突，不等于合出来是对的。分支的代码是照着分叉点的作业记录和页面写的，不知道 PR #59 改了什么。为此做了两份互相独立的调查，一份查运行页，一份查轨迹工具，都是把两边的改动逐个文件读过，并在合并后的代码上做了小的探测。下面按“合并里必须处理”“建议一起修”“之后再做”分开。每一条最要紧的结论我都对着合并后的代码再核实过一遍。</p>
+
+  <div class="pkg" id="must">
+    <h3>合并里必须处理的：3 件</h3>
+    <div class="panel">
+
+      <div class="item" id="m1">
+        <div class="n">M1</div>
+        <div class="body">
+          <div class="head"><h3>公开级别的轨迹会带出性能声明的出处、原句和命令</h3><span class="tag">轨迹记录器</span><span class="pill crit">要定一个方向</span></div>
+          <dl>
+            <dt>现象</dt>
+            <dd><code>nanolize trajectory record --detail public</code> 的承诺写在分支的 <code>docs/trajectory.md</code> 里：只留编号、枚举、计数和时间，没有文件名，没有参数，没有所有者的回答。但记录器把作业的 <code>result</code> 整份照抄（<code>trajectory.py</code> 里的 <code>"result": public.get("result")</code>）。在分叉点，这份结果里没有文字；PR #59 把每条性能声明的出处文件、行号、引用的原句（最长 500 个字符）、“测的是什么”的句子、项目自己的运行命令，以及测量用的 GPU 型号，都放进了 <code>result.performance</code>。</dd>
+            <dt>核实</dt>
+            <dd>用合并后的记录器读 PR #59 自己那次 detectron2 端到端运行留下的记录，公开级别的结果里有 5 条声明，条条带出处、句子和命令，还有 GPU 型号。轨迹页面不画这些内容，但页面是一个把数据整份内嵌的单文件，JSON 文件里也有。其余路径都查过，只有这一条会带出文字：别的字段记录器都是按名字挑着留的。</dd>
+            <dt>影响</dt>
+            <dd>公开级别就是为了给别人看而设的。对一个私有项目，文档里的句子、文件名和命令会跟着轨迹文件出去，而文档明说不会。</dd>
+            <dt>改法</dt>
+            <dd>公开级别时，把结果里的声明缩成编号、能力、设备、状态、是否比较过、用了几块 GPU、原因和结论，去掉 GPU 型号。main 已经有做这件事的函数（<code>performance_evidence.claim_outcomes</code>），所以只是在记录器里加一个十行左右的小函数；测试用的夹具里加一条带出处的声明，断言公开文档里没有那些文字；<code>docs/trajectory.md</code> 补一句“所有者级别带声明引用的原句”。</dd>
+            <dt>另一个方向</dt>
+            <dd>也可以反过来定：公开轨迹跟着作业的公开结果走，声明照带，然后把文档改成这么说。PR #59 里对公开的选择页就是这么定的（公开页面向每个访问者显示声明）。但记录器自己对能力名称和文件名的规则是“公开级别不留”，两者放在一起会自相矛盾，所以我建议按“改法”做。这件事列在<a href="#decide">需要你定的</a>第 2 条。</dd>
+          </dl>
+        </div>
+      </div>
+
+      <div class="item" id="m2">
+        <div class="n">M2</div>
+        <div class="body">
+          <div class="head"><h3>三个生成的演示页要重新生成</h3><span class="tag">docs</span><span class="pill good">跑命令</span></div>
+          <dl>
+            <dt>现象</dt>
+            <dd><code>docs/run-page-demo.html</code>、<code>docs/run-page-cases.html</code>、<code>docs/trajectory-demo.html</code> 都把运行页的脚本内嵌在自己里面。PR #59 改了 <code>run-dashboard.js</code>，脚本一合并，三个页面就都过期了。只有第一个有文本冲突，另外两个 Git 一声不吭。仓库里有测试专门检查这件事（<code>refresh --check</code>），不重新生成，合并后的测试就是红的。</dd>
+            <dt>改法</dt>
+            <dd>三条命令，画面数据不动，只换内嵌的脚本和样式：
+<pre>python scripts/run_page_demo.py refresh
+python scripts/run_page_cases.py build
+python scripts/trajectory_demo.py refresh</pre>
+              试合并里做过：三个页面各自的变化量和 PR #59 对 <code>run-dashboard.js</code> 的改动一致（+199 −18），重新生成后检查通过。<b>这一步必须放在最后</b>：之后只要再动运行页或轨迹页的任何脚本、样式（包括下面的修复），就要再跑一遍。</dd>
+            <dt>顺带</dt>
+            <dd>第二条命令用的是 <code>build</code> 而不是 <code>refresh</code>。原因和合并无关：分支最后一个提交给“优化轮数”一行加了一个字段（说明为什么一轮都不做），但提交进去的四种开关对照页没有按新代码重建，四条时间线的 213 帧里都缺这个字段，页面上还是旧的说法。<code>build</code> 会按现在的代码把画面重做一遍；在分支和合并后的代码上重建，结果完全相同。</dd>
+          </dl>
+        </div>
+      </div>
+
+      <div class="item" id="m3">
+        <div class="n">M3</div>
+        <div class="body">
+          <div class="head"><h3>固定流程的基准记录要重录</h3><span class="tag">tests/fixed_parity_golden.json</span><span class="pill warn">CI 看不到</span></div>
+          <dl>
+            <dt>现象</dt>
+            <dd><code>test_fixed_parity</code> 把固定流程的作业产出的所有东西和一份录好的记录逐项比较，其中包括“运行页显示这个作业的什么”。这份记录只在录制它的环境里可比，CI 上会跳过，所以 <b>PR 的 CI 全绿也发现不了它过期</b>。合并后的代码上，9 个场景的测试在 <code>run_page</code> 这一项上失败，连带 42 个中断续跑的测试失败。</dd>
+            <dt>原因</dt>
+            <dd>只有一个字段：分支让运行页多了一个指向交付报告的链接（<code>report: {route: "/report/"}</code>），这是分支有意加的。对照着跑了三遍来确认不是别的原因：main 自己 53 项全过；分叉点自己就不过，说明这份记录在分叉之前已经过期，是 PR #59 把它重录的；分支单独跑的失败因此是继承来的，不是分支造成的。</dd>
+            <dt>改法</dt>
+            <dd>在合并后的代码上重录一遍，单独一个提交，提交说明里写清楚差异只有这一个字段：
+<pre>cd tests &amp;&amp; NANOLIZE_RECORD_FIXED_PARITY=1 python -m unittest test_fixed_parity</pre>
+              试合并里已经重录过一遍：和 main 的那份相比只多 27 行，是 9 个场景各多一个 <code>report</code> 字段，没有别的差异；用重录后的记录再跑，53 项全过。</dd>
+          </dl>
+        </div>
+      </div>
+
+    </div>
+  </div>
+
+  <div class="pkg" id="should">
+    <h3>建议一起修的：4 处</h3>
+    <p>这四处都不是谁写错了，而是两边各自合理的设计碰到一起：分支让页面“少说一点”，PR #59 恰好往被收起来的地方加了新信息。每一处都是几行的改动，建议放进同一个 PR，各自一个提交、各带一条测试。</p>
+    <div class="panel">
+
+      <div class="item" id="s1">
+        <div class="n">S1</div>
+        <div class="body">
+          <div class="head"><h3>提交之前看不到这次要测哪几条性能声明</h3><span class="tag">选择页</span><span class="pill warn">四处里最要紧</span></div>
+          <dl>
+            <dt>现象</dt>
+            <dd>PR #59 的设计是：选择页在提交之前列出项目的性能声明，连同“只有落在你选中的能力上的声明才会被测”这句提醒；它们放在页面的“规划说明”里。分支让嵌在运行页第 02 阶段里的选择页默认只显示能力图，其余内容收在“Show details”按钮后面，“规划说明”也在其中（<code>viewer.css</code> 里对 <code>#limitations-panel</code> 的隐藏规则）。按钮上会提示后面有几条“注意”，但只数另外两块内容，不数规划说明。</dd>
+            <dt>后果</dt>
+            <dd>有人值守、开了性能验收的运行里，所有者在运行页上看到的是能力图、预设和提交按钮，看不到这次要测哪 5 条、哪些因为没选中而不会测；项目没有声明性能时，“这次什么都不会测”那句话也看不到。按钮上没有任何提示。单独打开的选择页不受影响。两边的 skill 文字也各说各的：一句说选择页列出声明，一句说它只显示能力图。</dd>
+            <dt>改法（两种，择一）</dt>
+            <dd><ol class="plain">
+              <li><b>按钮上说出来。</b>规划说明里有性能声明时，按钮写成“Show details · 5 performance claims”，并和现在有“注意”时一样高亮。改动最小，保持分支“只显示图”的设计。</li>
+              <li><b>开了性能验收时不折叠规划说明。</b>声明列表直接显示在图的下面。更稳妥，代价是这种情况下页面不再只有一张图。</li>
+            </ol>
+            无论哪种，都把 skill 里的那句话对上：告诉用户声明在哪里看。我的建议是第一种，见<a href="#decide">需要你定的</a>第 4 条。</dd>
+          </dl>
+        </div>
+      </div>
+
+      <div class="item" id="s2">
+        <div class="n">S2</div>
+        <div class="body">
+          <div class="head"><h3>“项目没有声明性能”那句话被折叠起来了</h3><span class="tag">运行页 第 05、06 阶段</span></div>
+          <dl>
+            <dt>现象</dt>
+            <dd>PR #59 给“开了性能验收、但项目没有声明任何性能”的作业只留了一句话，放在第 05 阶段的关卡和第 06 阶段的条目里，状态是“跳过”，代码注释里写着“这两处说明原因，仅此而已”。分支把所有“完成”和“跳过”的条目折叠成一行（“1 done · 2 skipped”），这句话正好在里面。</dd>
+            <dt>后果</dt>
+            <dd>结论的判断条件里没有性能（这是对的），页头和结束说明也不提。于是默认状态下，整个页面没有一处告诉所有者：你打开的性能验收为什么什么都没做。</dd>
+            <dt>改法</dt>
+            <dd>给这两个条目加一个“不折叠”的标记，折叠时跳过带标记的条目。只动这两处，其他性能条目照旧。</dd>
+          </dl>
+        </div>
+      </div>
+
+      <div class="item" id="s3">
+        <div class="n">S3</div>
+        <div class="body">
+          <div class="head"><h3>环境准备失败的交付，被说成“没有任何失败”</h3><span class="tag">运行页 结束说明</span></div>
+          <dl>
+            <dt>现象</dt>
+            <dd>分支加了一句结束说明：如果一次“有缺口”的交付，缺口只是“没人配置的检查”（比如没配安装检查），就说“Nothing failed. Not checked, because nothing is configured for it …”，并把状态标记画淡。它判断的依据是页面自己的那份条件列表，不读交付记录里实际列出的缺口。PR #59 新加了一种缺口：所有者配了环境准备步骤，而交付的候选版本上准备失败（<code>candidate_preparation_not_passed</code>）。页面的条件列表里没有它。</dd>
+            <dt>后果</dt>
+            <dd>准备步骤失败、又没配安装检查的作业，页面会说“没有任何失败，只是安装检查没配置”，状态画淡，第 06 阶段也没有任何条目提到准备失败。PR #59 加这种缺口，本意就是让这样的交付把它说出来。这个弱点是分支自己的（原有的几种没有对应条件的缺口也一样），PR #59 只是又添了一种，而且是检查全过时也会出现的一种。</dd>
+            <dt>改法</dt>
+            <dd>交付结果里有缺口列表时（<code>result.acceptance.gaps</code>），以它为准：只有全部缺口都是“未配置”才说“没有任何失败”，否则在“没有守住的”那句里把其余缺口说出来。再给新缺口补上页面用的说法。</dd>
+          </dl>
+        </div>
+      </div>
+
+      <div class="item" id="s4">
+        <div class="n">S4</div>
+        <div class="body">
+          <div class="head"><h3>重做的测试设计，会话数被算成两倍</h3><span class="tag">轨迹记录器</span></div>
+          <dl>
+            <dt>现象</dt>
+            <dd>PR #59 让被打断的测试设计在重做时接手已经做完的会话：为每个接手的会话写一份记录，里面时间和用量都是 0，并标着 <code>taken_over</code>。作业自己数会话时不算这些。轨迹记录器把作业目录下每一份这样的记录都算作一次模型会话。</dd>
+            <dt>后果</dt>
+            <dd>token 和时间是对的（接手的那份是 0），但会话数翻倍：PR #59 为之设计的那个场景里（60 个设计会话和 30 个评审会话被接手），轨迹会说 180 次会话，实际跑了 90 次。而且这些 0 用量的记录被当成“没有成本数据的会话”，页面会把一份完整的成本说成“下限”。</dd>
+            <dt>改法</dt>
+            <dd>记录器里加一行：带 <code>taken_over</code> 的记录不算会话，另外计数（“读到 N 份，其中 M 份是接手的”）。夹具里加一份这样的记录。</dd>
+            <dt>把握</dt>
+            <dd>依据是两边的代码和一份手工做的记录；PR #59 的端到端运行里没有出现过重做的设计，所以没有真实记录可验。</dd>
+          </dl>
+        </div>
+      </div>
+
+    </div>
+  </div>
+
+  <div class="pkg" id="later">
+    <h3>之后再做的：8 条</h3>
+    <p>都不会让页面说错话，只是说得不全，或者是本来就有、合并没有引起的小毛病。建议合并之后单独处理。</p>
+    <div class="panel scroll"><table>
+      <thead><tr><th></th><th>什么</th><th>现在会怎样</th><th>来源</th></tr></thead>
+      <tbody>
+        <tr><td>L1</td><td>被打断后重做的测试设计，会话在运行页的步骤下面列不出来，轨迹里也不带所属的叶子</td><td>页面退回到笼统的说法（“测试 agent 正在工作”），功能图上没有框。不说错话</td><td>分支只读第一次设计的目录；PR #59 让重做变成常见情况</td></tr>
+        <tr><td>L2</td><td>两个值没有对应的页面用语：状态词 <code>not_declared</code>，和上限原因 <code>design_not_run</code></td><td>中文页面上显示成英文的原始代码。前者只有手工调用才会出现</td><td>PR #59 的新值，分支的词表里没有</td></tr>
+        <tr><td>L3</td><td>保存候选后作业自己做的“重新准备环境”，被画成“回到冻结阶段”，并新开一圈</td><td>没有修复的作业在流程图上也显示两圈，轨迹页上每次保存后多一小段“冻结”</td><td>main 自己就有（运行页），轨迹继承了同一套规则。两处要一起改</td></tr>
+        <tr><td>L4</td><td>同一步在轨迹的步骤列表里排在它所属的那一轮之后</td><td>顺序看着不对，但每一步都带时间，没有说错</td><td>PR #59 让这一步出现在一轮的两次调用之间</td></tr>
+        <tr><td>L5</td><td>因为输出带路径而判为“未验证”的检查，轨迹里算在“未通过”里，不说原因</td><td>比较明明通过了，轨迹却显示“N 条里 k 条未通过”</td><td>PR #59 新加的一种未验证原因；轨迹对原有的几种也是这样</td></tr>
+        <tr><td>L6</td><td>轨迹页没有性能验收的一行</td><td>设置里只说“开了”；测了几条声明、结果如何，只出现在事件的句子里</td><td>轨迹页本来就没有这一行</td></tr>
+        <tr><td>L7</td><td>轨迹里不记录作业在等什么</td><td>只有状态；原因要从最后一条事件里读</td><td>分支自己的，和合并无关</td></tr>
+        <tr><td>L8</td><td>被打断的调用没有结束时间</td><td>那段时间里的会话不属于任何步骤，页面显示“没有在运行的步骤”</td><td>分支自己的，和合并无关</td></tr>
+      </tbody>
+    </table></div>
+    <p class="note">调查中顺带看到、同样和合并无关的几处：四种开关对照页里手写的“成功”结果缺两个字段，最后一帧在“成功”下面列着两条不成立的条件；真实运行演示页里“开了性能验收”的那次运行，画面里没有性能的上限设置，所以第 05 阶段没有性能关卡，流程里却有性能比较的步骤；轨迹里“检查通过 9 / 11”把没有运行的已退役检查也算进了总数。这些都留给分支的作者决定。</p>
+  </div>
+</section>
+
+<section id="fine">
+  <h2>查过、没有问题的</h2>
+  <p>列出来是为了说明覆盖到了哪里。除了注明的，都是读了两边的改动并在合并后的代码上探测过。</p>
+  <div class="panel scroll"><table>
+    <thead><tr><th>范围</th><th>查了什么，结果</th></tr></thead>
+    <tbody>
+      <tr><td>运行页的脚本</td><td>合并后的脚本留住了两边加的每一行，没有留下任何一边删掉的行；两边新加的名字不重名。中文：没有漏译，没有过期的译文，PR #59 的 26 个声明原因代码和后端的列表一致。PR #59 没有新增作业状态、阶段、暂停原因或步骤进度的形状，所以分支新加的运行时长、步骤时限、回答框、标签页标题、事件页签都不受影响</td></tr>
+      <tr><td>真实画面</td><td>两个演示页里全部 591 帧，用合并后的脚本在英文和中文下各画了一遍；再把每一帧改成 PR #59 那几种作业（没有声明性能；有 GPU 声明、有变慢的、有没测的；设计没跑完）各画一遍：没有异常</td></tr>
+      <tr><td>运行页的后端</td><td><code>run_dashboard.py</code>、<code>run_flow.py</code>、<code>execution_server.py</code> 自动合并的结果是对的：main 加的字段和分支加的字段各在各的位置；分支的回答路由、报告路由和 main 改过的函数互不相干</td></tr>
+      <tr><td>检查的进度计数</td><td>见 <a href="#c2">C2</a>：进度只在比较步骤里打开，不经过 main 新加的任何路径；不会超过总数，不会重复算</td></tr>
+      <tr><td>轨迹记录器读的记录</td><td>它读的每一种文件、日志行、工具名（39 个）、状态和事件字段，在 main 上都还在、意思没变。PR #59 新加的文件它不读。在 PR #59 自己的三次端到端运行（tqdm、detectron2、python-dotenv）留下的记录上跑，所有者级别和公开级别都没有异常</td></tr>
+      <tr><td>按时刻回放的功能图</td><td>计划、第一次基线、测试设计、第二次基线、封存这五个时刻，在 main 的作业里都还在、各一次。tqdm 那次运行回放出来是：21 条检查 → 设计后 30 条 → 第二次基线后都有结果，和实际一致</td></tr>
+      <tr><td>各种清单</td><td>打包检查的资源列表两边的改动合得上，合并后的打包通过；“哪些模块可以启动 Git”的测试不需要改（轨迹模块不启动任何程序）；命令行两个新子命令不冲突；MCP 工具数不变</td></tr>
+      <tr><td>skill 和提示词文档</td><td>两边改的是不同的步骤；两个生成文档的检查（<code>sync_workflow_docs.py --check</code>、<code>sync_prompt_docs.py --check</code>）在合并后直接通过，不用重新生成</td></tr>
+      <tr><td>分支的测试</td><td>轨迹测试的手写作业，在分支的代码和合并后的代码上录出来逐字节相同。分支的测试没有一条钉住 PR #59 改过的文字或数字</td></tr>
+    </tbody>
+  </table></div>
+  <p class="note">没能查的：真实的“被打断后重做的测试设计”（PR #59 的端到端运行里没有出现过，S4 和 L1 依据的是代码）；选择页和轨迹页没有在浏览器里实际打开看（依据是样式规则和脚本）；浏览器冒烟测试需要 Playwright，没有跑。</p>
+</section>
+
+
+<section id="steps">
+  <h2>合并步骤</h2>
+  <p>建议的做法是“把 main 合进分支，再开 PR 合回 main”。分支的 6 个提交原样保留，冲突的解法集中在一个合并提交里，审的人能一眼看到；PR 相对 main 的差异正好就是分支带来的东西。</p>
+
+  <div class="panel">
+    <ol class="steps">
+      <li><div><b>从分支末端开一条新分支</b>
+        <p>原分支不动，留作退路；如果做分支的 agent 还在往上面提交，也互不干扰。</p>
+<pre>git fetch origin
+git switch -c claude/run-page-on-main origin/claude/run-page-improvements</pre></div></li>
+      <li><div><b>把 main 合进来，先不提交</b>
+<pre>git merge --no-ff --no-commit origin/main</pre>
+        <p>Git 会报 5 个文件冲突，其余 18 个两边都改过的文件自动合并。这个方向上分支是“我方”（ours），main 是“对方”（theirs）。</p></div></li>
+      <li><div><b>按 <a href="#conflicts">C1 到 C4</a> 解冲突</b>
+        <p>两个源码文件和两份文档按上面写的办法解；生成的演示页取分支的版本。试合并里这一步已经写成脚本，每一处替换都要求“恰好匹配一次”，对不上就停，不会悄悄解错。</p>
+<pre>git checkout --ours docs/run-page-demo.html</pre></div></li>
+      <li><div><b>重新生成三个演示页（<a href="#m2">M2</a>）</b>
+<pre>python scripts/run_page_demo.py refresh
+python scripts/run_page_cases.py build
+python scripts/trajectory_demo.py refresh</pre></div></li>
+      <li><div><b>跑快的检查，然后提交合并</b>
+        <p>这几步在登录机上几十秒就完。合并提交的说明里写清楚：C1 里 main 的规则搬进了哪个函数，三个页面是重新生成的。到这一步，新分支相对 main 的差异是 67 个文件，+22,486 −1,062，就是分支带来的东西。</p>
+<pre>python scripts/sync_workflow_docs.py --check
+python scripts/sync_prompt_docs.py --check
+python -m compileall -q src tests examples
+node --test tests/*.test.cjs tests/*.test.mjs
+git add -A &amp;&amp; git commit</pre></div></li>
+      <li><div><b>修复提交：<a href="#m1">M1</a>，以及 <a href="#should">S1 到 S4</a></b>
+        <p>每个修复一个提交，各带一条“没有这个修复就失败”的测试。提交说明按仓库的习惯写：原来是什么样，现在的规则是什么。</p></div></li>
+      <li><div><b>再重新生成一遍演示页</b>
+        <p>S1 到 S3 改了页面的脚本和样式，三个页面又过期了。把第 4 步的三条命令再跑一遍，单独一个提交。</p></div></li>
+      <li><div><b>重录基准记录（<a href="#m3">M3</a>）</b>
+        <p>在计算节点上、和录制 main 那份记录相同的环境里重录，核对差异只有 <code>report</code> 那一个字段，单独一个提交。</p></div></li>
+      <li><div><b>整套测试，推送，开 PR</b>
+        <p>整套 Python 测试在计算节点上跑一遍，和 main 的结果对照；推送新分支，开 PR 进 main，等 CI 的 13 项（两个 Python 版本各 6 片，加打包）。</p></div></li>
+      <li><div><b>合入 main</b>
+        <p>用合并提交，和 PR #56、#57、#59 一样。合入由你来按。</p></div></li>
+    </ol>
+  </div>
+
+  <div class="panel scroll"><table>
+    <thead><tr><th>提交</th><th>内容</th><th>带的测试</th></tr></thead>
+    <tbody>
+      <tr><td>合并提交</td><td>把 main（PR #59）合进来；C1 到 C4；三个演示页按合并后的资源重新生成</td><td>两边原有的测试。main 的“没有声明性能”那条测试守着 C1</td></tr>
+      <tr><td>M1</td><td>公开级别的轨迹只留声明的编号和枚举，不带 GPU 型号</td><td>夹具的结果里加一条带出处的声明；公开文档里不得出现它的文件名、原句和命令</td></tr>
+      <tr><td>S1</td><td>嵌入的选择页在按钮上说出后面有几条性能声明（或不折叠规划说明）；skill 的一句话对上</td><td>页面测试：规划说明里有声明时，按钮的文字和高亮</td></tr>
+      <tr><td>S2</td><td>“项目没有声明性能”的两个条目不折叠</td><td>页面测试：这种作业的第 05、06 阶段，这句话在折叠之外</td></tr>
+      <tr><td>S3</td><td>结束说明以交付记录里的缺口为准；新缺口有页面用语</td><td>页面测试：准备失败加未配置安装检查的交付，不说“没有任何失败”</td></tr>
+      <tr><td>S4</td><td>接手的会话不算作模型会话</td><td>夹具里加一份接手的记录；会话数和成本是否完整</td></tr>
+      <tr><td>演示页</td><td>三个演示页再重新生成一遍</td><td>仓库里已有的“页面是否过期”测试</td></tr>
+      <tr><td>基准记录</td><td><code>tests/fixed_parity_golden.json</code> 重录</td><td><code>test_fixed_parity</code> 在本集群上 53 项</td></tr>
+    </tbody>
+  </table></div>
+
+  <div class="panel">
+    <h3>为什么不用另外两种办法</h3>
+    <ul class="plain">
+      <li><b>变基（把 6 个提交挪到 main 上面）。</b>分支的 6 个提交每一个都改了生成的演示页（其中两个各改了五六千行），3 个改了 <code>run-dashboard.js</code>。变基要在这些提交上反复解同样的冲突，生成页每次都得重新生成，而中间几个提交的页面已经无法忠实重建（第 4 个提交删掉了前面用来录制的脚本和场景）。仓库的 PR 本来就是用合并提交合入的，变基换不来更干净的历史。</li>
+      <li><b>压成一个提交。</b>历史最简单，但分支的 6 段提交说明各有二十六到六十二行，逐条写着页面的每个行为和原因，压掉就丢了。如果你更想要单个提交，可以在合入时选“压缩合并”，前面的步骤不变。</li>
+    </ul>
+  </div>
+  <p class="note">如果执行之前分支或 main 又有新提交：从第 1 步重做。解冲突是脚本，重新生成是命令，整个过程几分钟；需要重看的只有新提交碰到的地方。</p>
+</section>
+
+
+<section id="verify">
+  <h2>验证：试合并上跑过什么</h2>
+  <p>试合并在本地做了两遍，各在一个单独的工作树里：一遍在 main 上合入分支，一遍按方案的方向在分支上合入 main。两遍都按 <a href="#conflicts">C1 到 C4</a> 解冲突、重新生成三个演示页、放进重录的基准记录，得到的文件树完全相同（同一个树对象）。下面的结果都是这棵树上的；修复提交（M1、S1 到 S4）还没有写，不在其中。</p>
+  <div class="panel scroll"><table>
+    <thead><tr><th>检查</th><th>结果</th><th>说明</th></tr></thead>
+    <tbody>
+      <tr><td>JS 测试（CI 的 <code>node --test</code>，23 个文件）</td><td><span class="pill good">395 / 395</span></td><td>两边的页面测试合在一起。按错误办法解 C1 时是 394 / 395</td></tr>
+      <tr><td>两个生成文档的检查</td><td><span class="pill good">通过</span></td><td><code>sync_workflow_docs.py --check</code>、<code>sync_prompt_docs.py --check</code>，不用重新生成</td></tr>
+      <tr><td>Python 编译检查</td><td><span class="pill good">通过</span></td><td><code>compileall</code>，源码、测试、示例</td></tr>
+      <tr><td>两个示例（CI 的两步）</td><td><span class="pill good">通过</span></td><td><code>examples/run_demo.py</code>、<code>examples/run_capability_demo.py</code></td></tr>
+      <tr><td>打包（CI 的最后一项）</td><td><span class="pill good">通过</span></td><td>构建一次，装好的包和独立插件都被接受；资源清单里有两边各自新加的文件</td></tr>
+      <tr><td>三个演示页是否过期</td><td><span class="pill good">重新生成后通过</span></td><td>不重新生成时三个都报过期；相关的两个测试模块 28 项通过</td></tr>
+      <tr><td>整套 Python 测试（计算节点）</td><td><span class="pill good">没有合并引起的失败</span></td><td>5,878 项，1,320 个测试进程，其中 23 个进程失败：14 个是基准记录（下一行），6 个是满载时超时，3 个在 main 上同样失败。逐项见下表</td></tr>
+      <tr><td><code>test_fixed_parity</code>（只在本集群可比）</td><td><span class="pill good">重录后 53 / 53</span></td><td>main 自己 53 项通过；合并后因为多出一个字段而失败；重录后的差异只有这个字段，再跑 53 项通过。见 <a href="#m3">M3</a></td></tr>
+    </tbody>
+  </table></div>
+  <div class="panel scroll"><table>
+    <thead><tr><th>整套测试里失败的进程</th><th class="num">数量</th><th>判断</th></tr></thead>
+    <tbody>
+      <tr><td><code>test_fixed_parity</code></td><td class="num">14</td><td>基准记录比合并后的代码少一个字段。重录后 53 项全过，见 <a href="#m3">M3</a></td></tr>
+      <tr><td><code>test_execution_server</code>（2 个进程）、<code>test_leaf_test_design</code>、<code>test_first_baseline_node_kind</code>、<code>test_next_contract</code>、<code>test_parallel_mainline</code></td><td class="num">6</td><td>整作业的测试，16 个进程同时跑时超时。减少并发单独再跑，全部通过</td></tr>
+      <tr><td><code>test_verification_bundle</code>（1 项）、<code>test_check_executor_scheduler</code>（2 项）、<code>test_pair_jobs</code>（1 项）</td><td class="num">3</td><td>在 main 上用同样的方式跑，同样的 4 项失败。是这台集群上的测试环境造成的，和合并无关</td></tr>
+    </tbody>
+  </table></div>
+  <div class="panel">
+    <h3>执行时还要验的</h3>
+    <ul class="plain">
+      <li>每个修复提交自己的测试：先确认没有修复时失败，再确认有修复时通过。</li>
+      <li>全部提交完成后，整套 Python 测试和 JS 测试在最终的树上再跑一遍，和 main 对照。</li>
+      <li>PR 的 CI 13 项。注意 CI 不跑 <code>test_fixed_parity</code>，这一项要在本集群上单独确认。</li>
+      <li>建议用一个小仓库做一次真实运行，开着性能验收，在浏览器里看两处：第 02 阶段的选择页（S1），和交付后的第 05、06 阶段（S2）。这一步要不要做由你定；它会产生一次作业的费用。</li>
+    </ul>
+  </div>
+</section>
+
+
+<section id="decide">
+  <h2>需要你定的五件事</h2>
+  <p>每一条都写了我的建议。你说“按建议来”，就照左边一列执行。</p>
+  <div class="panel scroll"><table>
+    <thead><tr><th></th><th>要定的事</th><th>我的建议</th><th>另外的选择</th></tr></thead>
+    <tbody>
+      <tr><td>1</td><td><b>怎么合</b></td>
+        <td>从分支末端开新分支 <code>claude/run-page-on-main</code>，把 main 合进来，开 PR，用合并提交合入。原分支不动</td>
+        <td>直接在原分支上合（少一条分支，但做分支的 agent 如果还在提交会互相干扰）；或者合入时压成一个提交。不建议变基，理由见<a href="#steps">合并步骤</a></td></tr>
+      <tr><td>2</td><td><b>公开级别的轨迹带不带性能声明的原文</b>（<a href="#m1">M1</a>）</td>
+        <td>不带。公开级别只留每条声明的编号、能力、设备、状态和结论，去掉出处、原句、命令和 GPU 型号。这和记录器对能力名称、文件名的规则一致</td>
+        <td>照带，把文档改成“公开轨迹包含作业的公开结果”。和 PR #59 对公开选择页的决定一致，但轨迹文件比选择页更容易被转发</td></tr>
+      <tr><td>3</td><td><b>四处“建议一起修”的放不放进这个 PR</b>（<a href="#should">S1 到 S4</a>）</td>
+        <td>放。它们都是两条线碰到一起才出现的，每处几行，各自一个提交、各带测试。合并后的 main 从第一天起就是对的</td>
+        <td>这个 PR 只做冲突和 M1 到 M3，四处另开一个 PR。合并更快，但中间有一段时间 main 上的选择页看不到性能声明</td></tr>
+      <tr><td>4</td><td><b>选择页怎么让性能声明看得见</b>（<a href="#s1">S1</a>）</td>
+        <td>按钮上写出来：“Show details · 5 performance claims”，并高亮。保持“默认只显示能力图”的设计，改动最小</td>
+        <td>开了性能验收时不折叠规划说明，声明列表直接显示在图下面。更稳妥，但这种情况下页面不再只有一张图</td></tr>
+      <tr><td>5</td><td><b>谁来执行，什么时候</b></td>
+        <td>先确认做分支的 agent 已经停手、没有未推送的提交；然后由我按这份方案执行到“PR 开好、CI 通过”，合入由你来按。试合并已经在本地，重做只要几分钟</td>
+        <td>把这一页交给做分支的 agent 当清单，由它执行；我只做复核</td></tr>
+    </tbody>
+  </table></div>
+</section>
+
+<footer>
+  <h2>依据和限制</h2>
+  <ul class="plain">
+    <li><b>依据的提交。</b>main @ 25634d02（PR #59 的合并提交，相对分叉点只多这一个 PR），分支 @ 31a76ac4，分叉点 cd7fd735。任何一边再有新提交，冲突的位置和数量可能变，要重做一遍试合并。</li>
+    <li><b>试合并只在本地。</b>没有提交到任何远端，没有开 PR，两条分支都没有被改动。</li>
+    <li><b>调查的做法。</b>两份调查各自独立进行，互不知道对方的结论；其中一份自己解了一遍 <code>verification.py</code>，结果和试合并里的逐字节相同。它们报告的每一条“必须处理”和“建议一起修”，我都对着合并后的代码核实过。</li>
+    <li><b>没有做真实运行。</b>合并后的运行页没有在一次真实的作业上看过，选择页和轨迹页也没有在浏览器里打开。S1 的依据是样式规则，S2、S3 的依据是把页面画进一个模拟的文档。执行时建议在 PR 开好之后用一个小仓库跑一次、看一眼页面。</li>
+    <li><b>测试环境。</b>整套 Python 测试是在共享集群的计算节点上跑的。有几个整作业的测试在机器繁忙时会超时，和合并无关；判断一个失败是不是合并引起的，办法是在 main 上用同样的方式再跑一遍对照。</li>
+  </ul>
+</footer>
+
+
+</div>
+</body>
+</html>
