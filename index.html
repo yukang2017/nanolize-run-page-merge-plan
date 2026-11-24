@@ -186,7 +186,7 @@ pre, code { font-variant-ligatures: none; }
     <span><b>两条线</b> 都从 <code>cd7fd735</code>（PR #57 合入后）分出。main 多了 PR #59 的 198 个提交；分支多了 6 个提交</span>
     <span><b>做了什么</b> 在本地做了一次完整的试合并，解完全部冲突，跑了 CI 的每一步和整套测试；另有两份独立的代码调查，专查 Git 报不出来的问题</span>
     <span><b>没做什么</b> 没有推送，没有开 PR，远端的两条分支都没有动</span>
-    <span><b>状态</b> 方案。做法和四项取舍已经定下，见<a href="#decide">已经定下的</a>；什么时候开始、由谁执行，等你通知</span>
+    <span><b>状态</b> 方案。做法和各项取舍都已定下，见<a href="#decide">已经定下的</a>；只剩什么时候开始、由谁执行，等你通知</span>
   </div>
 </header>
 
@@ -196,7 +196,7 @@ pre, code { font-variant-ligatures: none; }
     <ul class="plain">
       <li><b>新分支从 main 开，不从分支开。</b>这是你定的：main 是花了很大力气修理和验证过的，要尽量不影响它本身的内容。所以做法改成从 main 的最新提交开新分支，把 <code>claude/run-page-improvements</code> 相对分叉点的改进合进来。上一版建议的方向相反。<a href="#steps">合并步骤</a>、图和命令都已按新方向改写。</li>
       <li><b>新增一节：<a href="#impact">main 的内容会被动到多少</a>。</b>逐个文件核对了两件事：PR #59 的改动在合并结果里是否原样保留（113 个文件里 106 个逐行相同，其余 7 个是冲突处和重新生成的文件），以及加到 main 上的是不是只有分支自己的改动。并列出了合并会碰到 main 已有代码的每一类地方。</li>
-      <li><b>四项取舍已经定下</b>（怎么合、公开轨迹不带声明原文、四处修复放进同一个 PR、选择页在按钮上写出声明条数）。还剩两件：什么时候开始、由谁执行；以及新提出的一个问题，分支对检查执行代码的那一处改动要不要随这次合并进来。见<a href="#decide">最后一节</a>。</li>
+      <li><b>各项取舍都已定下</b>：怎么合、公开轨迹不带声明原文、四处修复放进同一个 PR、选择页在按钮上写出声明条数，以及这一版新提出的一个问题，分支对检查执行代码的那一处改动随这次合并进来、并加一条对照测试。只剩一件：什么时候开始、由谁执行，等你通知。见<a href="#decide">最后一节</a>。</li>
     </ul>
   </div>
   <div class="kpis">
@@ -224,7 +224,7 @@ pre, code { font-variant-ligatures: none; }
     <li><b>另有 4 处是“分支的新显示方式遮住了 PR #59 新加的东西”。</b>最要紧的一处：嵌在第 02 阶段里的选择页现在默认只显示能力图，PR #59 放在“规划说明”里的性能声明列表被折叠起来，按钮上也不提示，所有者提交前看不到这次要测哪几条。见 <a href="#s1">S1</a>。</li>
     <li><b>三个生成的演示页和一份基准记录要重做，都是跑一条命令的事。</b>演示页内嵌了运行页的脚本，脚本一合并它们就过期，有测试会报。固定流程的基准记录（<code>fixed_parity_golden.json</code>）只多出一个字段，重录之后的差异我核对过。见 <a href="#m2">M2</a>、<a href="#m3">M3</a>。</li>
     <li><b>做法：从 main 的最新提交开一条新分支，把分支合进来，一个合并提交解决冲突，之后每个修复一个提交、各带一条测试，开 PR 进 main。</b>main 是起点，也是第一父提交；PR 相对 main 的差异就是加进来的东西。不用变基（6 个提交每个都改了生成的演示页，同样的冲突要反复解）也不压成一个提交（会丢掉 6 段写得很细的提交说明）。见<a href="#steps">合并步骤</a>。</li>
-    <li><b>main 自己的内容不受影响，这一点逐个文件核对过。</b>合并只碰到一处 PR #59 重点验证过的代码：检查的执行里，分支加了“比较步骤报告进度”，默认不启用。它要不要随这次合并进来，由你定。见<a href="#impact">main 的内容会被动到多少</a>。</li>
+    <li><b>main 自己的内容不受影响，这一点逐个文件核对过。</b>合并只碰到一处 PR #59 重点验证过的代码：检查的执行里，分支加了“比较步骤报告进度”，默认不启用。已经定下它随这次合并进来，并加一条对照测试：同一次比较，开和不开进度报告，检查结果逐项相同。见<a href="#impact">main 的内容会被动到多少</a>。</li>
     <li><b>没有发现会让合并后的代码出错或崩溃的地方。</b>两份调查把合并后的页面脚本在 591 帧真实运行记录上画了一遍，把记录器在 PR #59 自己的三次端到端运行的记录上跑了一遍，都没有异常。见<a href="#fine">查过没问题的</a>。</li>
   </ul>
 </section>
@@ -356,7 +356,7 @@ pre, code { font-variant-ligatures: none; }
     <thead><tr><th>碰到 main 的什么</th><th class="num">文件</th><th class="num">增删</th><th>改的是什么</th></tr></thead>
     <tbody>
       <tr><td><b>检查的执行</b><br><small><code>verification.py</code>、<code>job_tools/verify.py</code></small></td><td class="num">2</td><td class="num">+69 −7</td>
-        <td>比较步骤报告“多少条检查已有结果”。<b>这是合并唯一碰到 PR #59 重点验证过的检查执行代码的地方。</b>它默认不启用：只有比较步骤运行时才打开，其他任何调用路径上这段代码什么都不做。被改写的 7 行是：函数签名多一个参数、文档字符串、一条检查跑完后多报一声、一个判断条件原样挪进小函数、比较那一行外面多包一层。是否随这次合并进来，见<a href="#decide">还要你定的</a>第 6 条</td></tr>
+        <td>比较步骤报告“多少条检查已有结果”。<b>这是合并唯一碰到 PR #59 重点验证过的检查执行代码的地方。</b>它默认不启用：只有比较步骤运行时才打开，其他任何调用路径上这段代码什么都不做。被改写的 7 行是：函数签名多一个参数、文档字符串、一条检查跑完后多报一声、一个判断条件原样挪进小函数、比较那一行外面多包一层。已经定下：随这次合并进来，并加一条对照测试，确认开和不开进度报告时检查结果逐项相同（<a href="#decide">第 6 条</a>）</td></tr>
       <tr><td><b>作业和评审服务</b><br><small><code>execution.py</code>、<code>execution_server.py</code>、<code>cli.py</code>、<code>leaf_test_design.py</code></small></td><td class="num">4</td><td class="num">+75 −1</td>
         <td>纯新增：一个记录回答的方法（记的内容和 <code>job-answer</code> 命令一样，不启动任何东西）、一条回答问题的路由、一个命令行子命令、一个只读地列目录的函数。唯一改写的一行是路由的匹配规则多认一个词</td></tr>
       <tr><td><b>运行页的后端</b><br><small><code>run_dashboard.py</code>、<code>run_flow.py</code></small></td><td class="num">2</td><td class="num">+237 −25</td>
@@ -676,8 +676,8 @@ python scripts/sync_prompt_docs.py --check
 python -m compileall -q src tests examples
 node --test tests/*.test.cjs tests/*.test.mjs
 git add -A &amp;&amp; git commit</pre></div></li>
-      <li><div><b>修复提交：<a href="#m1">M1</a>，以及 <a href="#should">S1 到 S4</a></b>
-        <p>每个修复一个提交，各带一条“没有这个修复就失败”的测试。提交说明按仓库的习惯写：原来是什么样，现在的规则是什么。这五个修复都在轨迹记录器和页面的脚本里，不碰 PR #59 的后端；其中 S2、S3 会在 PR #59 写的页面脚本里各加一个标记、一个词。</p></div></li>
+      <li><div><b>对照测试和修复提交：<a href="#m1">M1</a>，以及 <a href="#should">S1 到 S4</a></b>
+        <p>先加一条对照测试，单独一个提交：同一次比较，开和不开进度报告，检查结果逐项相同（分支对检查执行代码的那一处改动因此有据可查）。然后每个修复一个提交，各带一条“没有这个修复就失败”的测试。提交说明按仓库的习惯写：原来是什么样，现在的规则是什么。这五个修复都在轨迹记录器和页面的脚本里，不碰 PR #59 的后端；其中 S2、S3 会在 PR #59 写的页面脚本里各加一个标记、一个词。</p></div></li>
       <li><div><b>再重新生成一遍演示页</b>
         <p>S1 到 S3 改了页面的脚本和样式，三个页面又过期了。把第 4 步的三条命令再跑一遍，单独一个提交。</p></div></li>
       <li><div><b>重录基准记录（<a href="#m3">M3</a>）</b>
@@ -693,6 +693,7 @@ git add -A &amp;&amp; git commit</pre></div></li>
     <thead><tr><th>提交</th><th>内容</th><th>带的测试</th></tr></thead>
     <tbody>
       <tr><td>合并提交</td><td>在 main 上把分支合进来；C1 到 C4；三个演示页按合并后的资源重新生成</td><td>两边原有的测试。main 的“没有声明性能”那条测试守着 C1</td></tr>
+      <tr><td>对照测试</td><td>不改代码。为“比较步骤报告进度”加一条测试</td><td>同一次比较跑两遍，开和不开进度报告；两遍的检查结果逐项相同</td></tr>
       <tr><td>M1</td><td>公开级别的轨迹只留声明的编号和枚举，不带 GPU 型号</td><td>夹具的结果里加一条带出处的声明；公开文档里不得出现它的文件名、原句和命令</td></tr>
       <tr><td>S1</td><td>嵌入的选择页在按钮上说出后面有几条性能声明；skill 的一句话对上</td><td>页面测试：规划说明里有声明时，按钮的文字和高亮</td></tr>
       <tr><td>S2</td><td>“项目没有声明性能”的两个条目不折叠</td><td>页面测试：这种作业的第 05、06 阶段，这句话在折叠之外</td></tr>
@@ -770,6 +771,9 @@ git add -A &amp;&amp; git commit</pre></div></li>
       <tr><td>4</td><td><b>选择页怎么让性能声明看得见</b>（<a href="#s1">S1</a>） <span class="pill good">已定</span></td>
         <td>按钮上写出来：“Show details · 5 performance claims”，并高亮。保持“默认只显示能力图”的设计</td>
         <td>开了性能验收时不折叠规划说明</td></tr>
+      <tr><td>6</td><td><b>分支对检查执行代码的那一处改动，要不要随这次合并进来</b>（<a href="#impact">比较步骤报告进度</a>） <span class="pill good">已定</span></td>
+        <td>进来。它默认不启用，只在比较步骤里打开。执行时为它单独加一条对照测试：同一次比较，开和不开进度报告，检查结果逐项相同</td>
+        <td>这次不带，<code>verification.py</code> 和 <code>job_tools/verify.py</code> 取 main 的版本，以后另开小 PR 单独加</td></tr>
     </tbody>
   </table></div>
 
@@ -779,9 +783,6 @@ git add -A &amp;&amp; git commit</pre></div></li>
       <tr><td>5</td><td><b>谁来执行，什么时候</b> <span class="pill warn">等你通知</span></td>
         <td>你说过真要开始改的时候再告诉我怎么做。在那之前我不提交、不推送、不开 PR。试合并留在本地，随时可以接着做</td>
         <td></td></tr>
-      <tr><td>6</td><td><b>分支对检查执行代码的那一处改动，要不要随这次合并进来</b>（<a href="#impact">比较步骤报告进度</a>） <span class="pill warn">新问题</span></td>
-        <td>进来。它默认不启用，只在比较步骤里打开；整套 5,878 项测试（包括 PR #59 新加的全部）在带着它的代码上没有因它而失败；把它单独拆出去反而要手工改动分支的内容。执行时我会为它单独加一条对照：同一次比较，开和不开进度报告，检查结果逐项相同</td>
-        <td>这次不带。<code>verification.py</code> 和 <code>job_tools/verify.py</code> 取 main 的版本，一个字节不动；分支为它写的测试（在两个测试文件里）和文档里的一句话也留在外面。代价是运行页上比较步骤下面没有进度条，以后另开一个小 PR 单独加、单独审</td></tr>
     </tbody>
   </table></div>
 </section>
